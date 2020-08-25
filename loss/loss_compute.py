@@ -1,113 +1,113 @@
 import torch
 import torch.nn.functional as F
+from torch import nn
+
+_EPSILON = 1e-08
+_SIGMA1 = 0.1
+
+
+# USER-DEFINED FUNCTIONS
+def log(x):
+    return torch.log(x + _EPSILON)
+
+
+def div(x, y):
+    return torch.div(x, (y + _EPSILON))
 
 
 class LossCompute(object):
-    def __init__(self, feature_extractor, loss_factors, device="cuda"):
-        self.device = device
-        self.feature_extractor = feature_extractor
-        self.feature_extractor.eval()
-        self.loss_factors = loss_factors
+    def __init__(self, hparams):
+        self.hparams = hparams
 
-    def gram_matrix(self, feature_matrix):
-        (batch, channel, h, w) = feature_matrix.size()
-        feature_matrix = feature_matrix.view(batch, channel, h * w)
-        feature_matrix_t = feature_matrix.transpose(1, 2)
-        gram = torch.bmm(feature_matrix, feature_matrix_t) / (channel * h * w)
-        return gram
+    def loss_log_likelihood(self, inputs, k, mask1):
+        I_1 = torch.sign(k).bool()
 
-    def loss_style(self, output, vgg_gt):
-        loss = 0.0
-        for o, g in zip(output, vgg_gt):
-            loss += self.l1(self.gram_matrix(o), self.gram_matrix(g))
+        # for uncenosred: log P(T=t,K=k|x)
+        loss1 = torch.sum(torch.sum(mask1 * inputs, dim=2), dim=1)
+        loss1 = I_1 * log(loss1)
+        # loss1 = log(loss1[I_1])
+
+        # for censored: log \sum P(T>t|x)
+        loss2 = torch.sum(torch.sum(mask1 * inputs, dim=2), dim=1)
+        loss2 = ~I_1 * log(loss2)
+        # loss2 = log(loss2[~I_1])
+
+        loss = -torch.mean(loss1 + loss2)
         return loss
 
-    def l1(self, y_true, y_pred):
-        if len((y_true).shape) == 4:
-            return torch.mean(abs(y_pred - y_true), [1, 2, 3])
-        elif len((y_true).shape) == 3:
-            return torch.mean(abs(y_pred - y_true), [1, 2])
-        else:
-            raise "ERROR Calculating l1 loss"
+    # LOSS-FUNCTION 2 -- Ranking loss
+    def loss_ranking(self, inputs, k, t, mask2, num_event, num_category):
 
-    def PSNR(self, y_true, y_pred):
-        return (
-            -10.0
-            * torch.log(torch.mean((y_pred - y_true) ** 2))
-            / torch.log(torch.tensor(10.0, dtype=torch.float, requires_grad=False))
-        )
+        eta = []
+        for e in range(num_event):
+            one_vector = torch.ones_like(t, dtype=torch.float32)
+            I_2 = torch.diag((k == e + 1).float())  # indicator for event
+            # event specific joint prob.
+            # tmp_e = torch.reshape(inputs[:, e, :], (-1, num_category))
+            tmp_e = inputs[:, e, :]
 
-    def loss_perceptual(self, vgg_out, vgg_gt, vgg_comp):
-        loss = 0
-        for o, c, g in zip(vgg_out, vgg_comp, vgg_gt):
-            loss += self.l1(o, g) + self.l1(c, g)
-        return loss
+            # no need to divide by each individual dominator
+            R = tmp_e @ mask2.T
+            # r_{ij} = risk of i-th pat based on j-th time-condition (last meas. time ~ event time) , i.e. r_i(T_{j})
 
-    def loss_tv(self, mask, y_comp):
-        kernel = torch.ones(
-            (3, 3, mask.shape[1], mask.shape[1]), requires_grad=False
-        ).to(self.device)
-        dilated_mask = F.conv2d(1 - mask, kernel, padding=1)
+            diag_R = torch.diagonal(R)
+            # R_{ij} = r_{j}(T_{j}) - r_{i}(T_{j})
+            R = diag_R.expand_as(I_2) - R
+            # Now, R_{ij} (i-th row j-th column) = r_{i}(T_{i}) - r_{j}(T_{i})
+            R = torch.transpose(R, 0, 1)
 
-        dilated_mask = torch.tensor(
-            dilated_mask > 0, dtype=torch.float, requires_grad=False
-        ).to(self.device)
-        P = dilated_mask * y_comp
+            T = F.relu(torch.sign(t.expand_as(I_2) - t.expand_as(I_2).T))
+            # T_{ij}=1 if t_i < t_j  and T_{ij}=0 if t_i >= t_j
 
-        a = self.l1(P[:, :, :, 1:], P[:, :, :, :-1])
-        b = self.l1(P[:, :, 1:, :], P[:, :, :-1, :])
-        return a + b
+            # only remains T_{ij}=1 when event occured for subject i
+            T = torch.matmul(I_2, T)
 
-    def loss_hole(self, mask, y_true, y_pred):
-        return self.l1((1 - mask) * y_true, (1 - mask) * y_pred)
+            tmp_eta = torch.mean(T * torch.exp(-R / _SIGMA1), dim=1, keepdim=True)
 
-    def loss_valid(self, mask, y_true, y_pred):
-        return self.l1(mask * y_true, mask * y_pred)
+            eta.append(tmp_eta)
+        # eta = torch.stack(eta, dim=1)  # stack referenced on subjects
+        # eta = torch.mean(torch.reshape(eta, (-1, num_event)),
+        #                  dim=1,
+        #                  keepdim=True)
+        eta = torch.cat(eta, dim=1).mean(1)
 
-    def loss_total(self, mask):
-        def loss(y_true, y_pred):
-            y_comp = mask * y_true + (1 - mask) * y_pred
+        LOSS_2 = torch.sum(eta)  # sum over num_Events
 
-            vgg_out = self.feature_extractor(y_pred)
-            vgg_gt = self.feature_extractor(y_true)
-            vgg_comp = self.feature_extractor(y_comp)
+        return LOSS_2
 
-            loss_hole = (
-                self.loss_hole(mask, y_true, y_pred) * self.loss_factors["loss_hole"]
-            ).mean()
-            loss_valid = (
-                self.loss_valid(mask, y_true, y_pred) * self.loss_factors["loss_valid"]
-            ).mean()
-            loss_perceptual = (
-                self.loss_perceptual(vgg_out, vgg_gt, vgg_comp)
-                * self.loss_factors["loss_perceptual"]
-            ).mean()
+    # LOSS-FUNCTION 3 -- Calibration Loss
+    def loss_calibration(self, inputs, k, t, mask2):
+        '''
+        This loss is not used in the original paper & code.
+        '''
+        eta = []
+        for e in range(self.num_Event):
+            one_vector = torch.ones_like(t, dtype=torch.float32)
+            I_2 = (k == e + 1).float()  # indicator for event
+            tmp_e = torch.reshape(
+                inputs[:, e, :],
+                (-1, self.num_Category))  # event specific joint prob.
 
-            loss_style_out = (
-                self.loss_style(vgg_out, vgg_gt) * self.loss_factors["loss_style_out"]
-            ).mean()
-            loss_style_comp = (
-                self.loss_style(vgg_comp, vgg_gt) * self.loss_factors["loss_style_comp"]
-            ).mean()
-            loss_tv = (self.loss_tv(mask, y_comp) * self.loss_factors["loss_tv"]).mean()
+            r = torch.sum(
+                tmp_e * mask2,
+                dim=0)  # no need to divide by each individual dominator
+            tmp_eta = torch.mean((r - I_2)**2, dim=1, keepdim=True)
 
-            return (
-                (
-                    loss_valid
-                    + loss_hole
-                    + loss_perceptual
-                    + loss_style_out
-                    + loss_style_comp
-                    + loss_tv
-                ),
-                {
-                    "loss_hole": loss_hole,
-                    "loss_valid": loss_valid,
-                    "loss_perceptual": loss_perceptual,
-                    "loss_style_out": loss_style_out,
-                    "loss_style_comp": loss_style_comp,
-                    "loss_tv": loss_tv,
-                },
-            )
+            eta.append(tmp_eta)
+        eta = torch.stack(eta, dim=1)  # stack referenced on subjects
+        eta = torch.mean(torch.reshape(eta, (-1, self.num_Event)),
+                         dim=1,
+                         keepdim=True)
 
-        return loss
+        LOSS_3 = torch.sum(eta)  # sum over num_Events
+
+        return LOSS_3
+
+    # def loss_total(self, inputs, k, t, mask1, mask2, a, b, c):
+    def loss_total(self, inputs, batch, num_event, num_category):
+        data, label, time, mask1, mask2 = batch
+
+        LOSS_TOTAL = self.hparams.alpha * self.loss_log_likelihood(inputs, label, mask1) +\
+            self.hparams.beta * self.loss_ranking(inputs, label, time, mask2, num_event, num_category)
+
+        return LOSS_TOTAL

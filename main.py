@@ -5,7 +5,7 @@ import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
-from lightning.survival_system import SurvivalSystem as MyModel
+from models.deephit import DeepHit as Model
 from torchvision.transforms import Compose
 from math import floor, pi
 from sklearn.model_selection import train_test_split
@@ -34,30 +34,11 @@ def main(hparams):
     checkpoint_callback = ModelCheckpoint(
         filepath=checkpoint_path, save_top_k=5, monitor="ci", mode="max"
     )
-    # model = init_model(hparams)
-    model = MyModel(hparams)
+    model = Model(hparams)
     trainer = Trainer.from_argparse_args(hparams, deterministic=True, benchmark=False)
     trainer.logger = logger
     trainer.checkpoint_callback = checkpoint_callback
     trainer.fit(model)
-
-
-# def init_model(hparams):
-#     if hparams.model_type == "baseline":
-#         print(f"Model type is {hparams.model_type}")
-#         return SimpleCNN(hparams)
-#     elif hparams.model_type == "resnet":
-#         from .resnet3d import generate_model
-#         model = generate_model(hparams, model_depth=hparams.model_depth)
-#     elif hparams.model_type == "resnext":
-#         from .resnext import generate_model
-#         model = generate_model(hparams, model_depth=hparams.model_depth)
-#     elif hparams.model_type == "densenet":
-#         from .densenet import generate_model
-#         model = generate_model(hparams, model_depth=hparams.model_depth)
-
-#     print(f"Model type is {hparams.model_type}-{hparams.model_depth}")
-#     return model
 
 
 if __name__ == "__main__":
@@ -104,7 +85,7 @@ if __name__ == "__main__":
         help="Number of depth of the ResNet model.",
     )
 
-    parser = MyModel.add_model_specific_args(parser)
+    parser = Model.add_model_specific_args(parser)
     parser = Trainer.add_argparse_args(parser)
     hparams = parser.parse_args()
     main(hparams)
