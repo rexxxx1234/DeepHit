@@ -1,4 +1,4 @@
-name: deephit2
+name: deephit
 channels:
   - conda-forge
   - pytorch
@@ -89,7 +89,6 @@ dependencies:
   - python-dateutil=2.8.1=py_0
   - python_abi=3.7=1_cp37m
   - pytorch=1.6.0=py3.7_cuda10.1.243_cudnn7.6.3_0
-  - pytorch-lightning=0.8.5=py_0
   - pytz=2020.1=pyh9f0ad1d_0
   - pyyaml=5.3.1=py37h8f50634_0
   - readline=8.0=he28a2e2_2
@@ -127,10 +126,11 @@ dependencies:
     - keras-preprocessing==1.1.2
     - opt-einsum==3.3.0
     - protobuf==3.13.0
-    - tensorboard==1.15.0
+    - pytorch-lightning==0.9.1rc1
+    - tensorboard==2.2.0
     - tensorflow-estimator==1.15.1
     - tensorflow-gpu==1.15.0
     - termcolor==1.1.0
     - wrapt==1.12.1
-prefix: /home/zydou/anaconda3/envs/deephit2
+prefix: /home/zydou/anaconda3/envs/deephit
 
