@@ -113,8 +113,9 @@ def import_dataset_SYNTHETIC(data_root, norm_mode="standard"):
 
     mask1 = f_get_fc_mask2(time, label, num_Event, num_Category)
     mask2 = f_get_fc_mask3(time, -1, num_Category)
+    eval_time = [12, 24, 36]
 
-    return [[data, label, time], [mask1, mask2]]
+    return [[data, label, time], [mask1, mask2], eval_time]
 
 
 def import_dataset_METABRIC(data_root, norm_mode="standard"):
@@ -138,5 +139,6 @@ def import_dataset_METABRIC(data_root, norm_mode="standard"):
 
     mask1 = f_get_fc_mask2(time, label, num_Event, num_Category)
     mask2 = f_get_fc_mask3(time, -1, num_Category)
+    eval_time = [144, 288, 432]
 
-    return [[data, label, time], [mask1, mask2]]
+    return [[data, label, time], [mask1, mask2], eval_time]

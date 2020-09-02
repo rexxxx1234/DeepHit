@@ -12,12 +12,13 @@ from torch.utils.data import Dataset
 
 class SurvivalDataset(Dataset):
     def __init__(self, alldata):
-        [data, label, time], [mask1, mask2] = alldata
+        [data, label, time], [mask1, mask2], eval_time = alldata
         self.data = data.astype(np.float32)
         self.time = time.ravel().astype(np.float32)
         self.label = label.ravel()
         self.mask1 = mask1.astype(int)
         self.mask2 = mask2.astype(np.float32)
+        self.eval_time = eval_time
 
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor]:

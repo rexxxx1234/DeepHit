@@ -20,24 +20,35 @@ seed_everything(42)
 
 
 def main(hparams):
-    slurm_id = os.environ.get("SLURM_JOBID")
-    if slurm_id is None:
-        version = None
-    else:
-        version = str(slurm_id)
-    logger = TensorBoardLogger(hparams.logdir, name=hparams.exp_name, version=version)
+    # slurm_id = os.environ.get("SLURM_JOBID")
+    # if slurm_id is None:
+    #     version = None
+    # else:
+    #     version = str(slurm_id)
+    logger = TensorBoardLogger(
+        hparams.logdir,
+        name=
+        f"{hparams.exp_name}~batch_{hparams.batch_size}~sharedlayers_{hparams.num_layers_shared}~shareddim_{hparams.hidden_dim_shared}~cslayers_{hparams.num_layers_CS}~csdim_{hparams.hidden_dim_CS}~outdim_{hparams.out_dim}~lr_{hparams.lr:.0e}~weightdecay_{hparams.weight_decay}~dropout_{hparams.dropout}~activation_{hparams.activation}~alpha_{hparams.alpha}~beta_{hparams.beta}",
+        version=None)
     checkpoint_path = os.path.join(
         logger.experiment.get_logdir(),
         "checkpoints",
-        "{epoch:02d}-{val_loss:.2e}-{ci:.2f}",
+        "{epoch:02d}-{val_loss:.2f}-{CI:.2f}",
     )
-    checkpoint_callback = ModelCheckpoint(
-        filepath=checkpoint_path, save_top_k=5, monitor="ci", mode="max"
-    )
+    checkpoint_callback = ModelCheckpoint(filepath=checkpoint_path,
+                                          save_top_k=5,
+                                          monitor="CI",
+                                          mode="max")
+    hparams.progress_bar_refresh_rate = 0  # disable progress bar
+
     model = Model(hparams)
-    trainer = Trainer.from_argparse_args(hparams, deterministic=True, benchmark=False)
-    trainer.logger = logger
-    trainer.checkpoint_callback = checkpoint_callback
+    trainer = Trainer.from_argparse_args(
+        hparams,
+        logger=logger,
+        checkpoint_callback=checkpoint_callback,
+        deterministic=True,
+        benchmark=False,
+    )
     trainer.fit(model)
 
 
@@ -66,18 +77,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=1,
+        default=12,
         help="Number of worker processes to use for data loading.",
     )
     parser.add_argument(
         "--exp_name",
         type=str,
-        default="simple_cnn",
+        default="deephit",
         help="Experiment name for logging purposes.",
     )
-    parser.add_argument(
-        "--model_type", type=str, default="resnet", help="Which model to use."
-    )
+    parser.add_argument("--model_type",
+                        type=str,
+                        default="resnet",
+                        help="Which model to use.")
     parser.add_argument(
         "--model_depth",
         type=int,
