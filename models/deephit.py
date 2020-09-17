@@ -15,6 +15,7 @@ from loss.loss_compute import LossCompute
 from argparse import ArgumentParser
 from utils import download_dataset, import_dataset_METABRIC, import_dataset_SYNTHETIC
 from utils.evaluation import weighted_c_index
+from itertools import islice
 
 
 class DeepHit(pl.LightningModule):
@@ -70,20 +71,24 @@ class DeepHit(pl.LightningModule):
         # make sure the validation set is balanced
         full_indices = range(len(full_dataset))
         full_targets = full_dataset.label
-        train_indices, test_indices = train_test_split(
-            full_indices, test_size=0.2, stratify=full_targets)
+        train_indices, val_indices = train_test_split(
+            full_indices, test_size=0.36, stratify=full_targets)
+        train_dataset, val_dataset = (Subset(full_dataset, train_indices), Subset(full_dataset, val_indices))
+        '''
         train_indices, val_indices = train_test_split(
             train_indices, test_size=0.2, stratify=full_targets[train_indices])
         train_dataset, val_dataset, test_dataset = (Subset(full_dataset, train_indices), Subset(
             full_dataset, val_indices), Subset(full_dataset, test_indices))
-
+        
+        self.test_dataset = test_dataset
+        self.test_indices = test_indices
+        '''
         self.full_dataset = full_dataset
         self.train_dataset = train_dataset
-        self.val_dataset = val_dataset
-        self.test_dataset = test_dataset
         self.train_indices = train_indices
+        self.val_dataset = val_dataset
         self.val_indices = val_indices
-        self.test_indices = test_indices
+
 
     def setup(self, step):
         # step is either 'fit' or 'test' 90% of the time not relevant
@@ -99,10 +104,10 @@ class DeepHit(pl.LightningModule):
         self.val_time = self.full_dataset.time[self.val_indices].reshape(-1, 1)
         self.val_label = self.full_dataset.label[self.val_indices].reshape(
             -1, 1)
-        self.test_time = self.full_dataset.time[self.test_indices].reshape(
-            -1, 1)
-        self.test_label = self.full_dataset.label[self.test_indices].reshape(
-            -1, 1)
+        #self.test_time = self.full_dataset.time[self.test_indices].reshape(
+        #    -1, 1)
+        #self.test_label = self.full_dataset.label[self.test_indices].reshape(
+        #    -1, 1)
         x_dim = self.full_dataset.data.shape[-1]
         activation = {
             "relu": nn.ReLU(),
@@ -216,20 +221,57 @@ class DeepHit(pl.LightningModule):
         This method is called automatically by pytorch-lightning.
         """
         data, label, time, mask1, mask2 = batch
-        output = self.forward(data)
-        loss = self.criterion.loss_total(output, batch, self.num_event, self.num_category)
-        return {"loss": loss, "output": output}
+
+        num_val = int((4/9) * len(data))
+        num_test = int((5/9) * len(data))
+
+        data_te = data[-num_test:]
+        label_te = label[-num_test:]
+        time_te = time[-num_test:]
+        mask1_te = mask1[-num_test:]
+        mask2_te = mask2[-num_test:]
+
+        batch_te = [data_te, label_te, time_te, mask1_te, mask2_te]
+
+        data_va = data[:num_val]
+        label_va = label[:num_val]
+        time_va = time[:num_val]
+        mask1_va = mask1[:num_val]
+        mask2_va = mask2[:num_val]
+
+        batch_va = [data_va, label_va, time_va, mask1_va, mask2_va]
+
+        output_te = self.forward(data_te)
+        loss_te = self.criterion.loss_total(output_te, batch_te, self.num_event, self.num_category)
+
+        output_va = self.forward(data_va)
+        loss_va = self.criterion.loss_total(output_va, batch_va, self.num_event, self.num_category)
+
+        return {"val_loss": loss_va, "val_output": output_va, "test_loss": loss_te, "test_output": output_te}
 
     def validation_epoch_end(self, outputs):
         """Compute performance metrics on the validation dataset.
         This method is called automatically by pytorch-lightning.
         """
-        loss = torch.stack([x["loss"] for x in outputs]).mean().item()
-        pred = torch.cat([x["output"] for x in outputs])
 
-        prednp = pred.detach().cpu().numpy()
+        loss_val = torch.stack([x["val_loss"] for x in outputs]).mean().item()
+        pred_val = torch.cat([x["val_output"] for x in outputs])
+        prednp_val = pred_val.detach().cpu().numpy()
 
-        # EVALUATION
+        loss_test = torch.stack([x["test_loss"] for x in outputs]).mean().item()
+        pred_test = torch.cat([x["test_output"] for x in outputs])
+        prednp_test = pred_test.detach().cpu().numpy()
+
+        num_val = int((4/9) * len(self.val_time))
+        num_test = int((5/9) * len(self.val_time))
+        
+        time_val = self.val_time[:num_val]
+        time_test = self.val_time[-num_test:]
+
+        label_val = self.val_label[:num_val]
+        label_test = self.val_label[-num_test:]
+
+        # EVALUATION for validation
         result = torch.zeros([self.num_event, len(self.eval_time)])
 
         for t, eval_horizon in enumerate(self.eval_time):
@@ -238,33 +280,54 @@ class DeepHit(pl.LightningModule):
                 result[:, t] = -1
             else:
                 # risk score until eval_time
-                risk = np.sum(prednp[:, :, :(eval_horizon+1)], axis=2)
+                risk = np.sum(prednp_val[:, :, :(eval_horizon+1)], axis=2)
                 for k in range(self.num_event):
                     result[k, t] = weighted_c_index(self.tr_time, (self.tr_label[:, 0] == k + 1).astype(
-                        int), risk[:, k], self.val_time, (self.val_label[:, 0] == k + 1).astype(int), eval_horizon)
-        CI = torch.mean(result)
+                        int), risk[:, k], time_val, (label_val[:, 0] == k + 1).astype(int), eval_horizon)
+        CI_val = torch.mean(result)
+
+
+        # EVALUATION for test
+        result = torch.zeros([self.num_event, len(self.eval_time)])
+
+        for t, eval_horizon in enumerate(self.eval_time):
+            if eval_horizon >= self.num_category:
+                print('ERROR: evaluation horizon is out of range')
+                result[:, t] = -1
+            else:
+                # risk score until eval_time
+                risk = np.sum(prednp_test[:, :, :(eval_horizon+1)], axis=2)
+                for k in range(self.num_event):
+                    result[k, t] = weighted_c_index(self.tr_time, (self.tr_label[:, 0] == k + 1).astype(
+                        int), risk[:, k], time_test, (label_test[:, 0] == k + 1).astype(int), eval_horizon)
+        CI_test = torch.mean(result)
 
         logs = {
-            "val_loss": loss,
-            "CI": CI
+            "val_loss": loss_val,
+            "val_CI": CI_val,
+            "test_loss": loss_test,
+            "test_CI": CI_test,
         }
         tqdm_dict = logs
         if self.hparams.progress_bar_refresh_rate == 0 and not self.trainer.running_sanity_check:
-            print(f"Epoch: {self.current_epoch}, Val_loss: {loss:.2f}, CI: {CI.item():.3f}")
-        return {"val_loss": loss, "log": logs, "progress_bar": tqdm_dict}
+            print(f"Epoch: {self.current_epoch}, Val_loss: {loss_val:.2f}, Val_CI: {CI_val.item():.3f}, Test_loss: {loss_test:.2f}, Test_CI: {CI_test.item():.3f}")
+        return {"val_loss": loss_val, "log": logs, "progress_bar": tqdm_dict}
 
     def test_step(self, batch, batch_idx):
         """Run a single test step on a batch of samples.
         This method is called automatically by pytorch-lightning.
         """
-        return self.validation_step(batch, batch_idx)
+        data, label, time, mask1, mask2 = batch
+        output = self.forward(data)
+        loss = self.criterion.loss_total(output, batch, self.num_event, self.num_category)
+        return {"test_loss_step": loss, "test_output_step": output}
 
     def test_epoch_end(self, outputs):
         """Compute performance metrics on the test dataset.
         This method is called automatically by pytorch-lightning.
         """
-        loss = torch.stack([x["loss"] for x in outputs]).mean().item()
-        pred = torch.cat([x["output"] for x in outputs])
+        loss = torch.stack([x["test_loss_step"] for x in outputs]).mean().item()
+        pred = torch.cat([x["test_output_step"] for x in outputs])
 
         prednp = pred.detach().cpu().numpy()
 
@@ -288,6 +351,8 @@ class DeepHit(pl.LightningModule):
             "CI": CI
         }
         tqdm_dict = logs
+        if self.hparams.progress_bar_refresh_rate == 0 and not self.trainer.running_sanity_check:
+            print(f"Epoch: {self.current_epoch}, test_loss: {loss:.2f}, CI: {CI.item():.3f}")
         return {"test_loss": loss, "log": logs, "progress_bar": tqdm_dict}
 
     @staticmethod

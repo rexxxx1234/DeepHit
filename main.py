@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks.base import Callback
 from pytorch_lightning.loggers import TensorBoardLogger
 from models.deephit import DeepHit as Model
 from torchvision.transforms import Compose
@@ -13,11 +14,25 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from torch.utils.data import DataLoader, Subset
 from copy import copy
 
+
 # from .transforms import *
 # from .dataset import RadcureDataset
 
 seed_everything(42)
+class MyCallback(Callback):
+    def on_init_start(self, trainer):
+        print('Starting to init trainer!')
 
+    def on_init_end(self, trainer):
+        print('trainer is init now')
+
+    def on_train_end(self, trainer, pl_module):
+        print('do something when training ends')
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        print("Testing start!")
+        trainer.test()
+        print("Testing end!")
 
 def main(hparams):
     # slurm_id = os.environ.get("SLURM_JOBID")
@@ -37,7 +52,7 @@ def main(hparams):
     )
     checkpoint_callback = ModelCheckpoint(filepath=checkpoint_path,
                                           save_top_k=5,
-                                          monitor="CI",
+                                          monitor="val_CI",
                                           mode="max")
     hparams.progress_bar_refresh_rate = 0  # disable progress bar
 
@@ -46,10 +61,12 @@ def main(hparams):
         hparams,
         logger=logger,
         checkpoint_callback=checkpoint_callback,
+        # callbacks=[MyCallback()],
         deterministic=True,
         benchmark=False,
     )
     trainer.fit(model)
+    #trainer.test(ckpt_path=checkpoint_callback.best_model_path)
 
 
 if __name__ == "__main__":
