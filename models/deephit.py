@@ -113,8 +113,10 @@ class DeepHit(pl.LightningModule):
         def create_FC(n_layer, in_dim, hidden_dim, out_dim):
             layers = nn.ModuleList()
             for i in range(1, n_layer):
-                layers.extend([nn.Linear(in_dim, hidden_dim),
-                               activation, nn.Dropout(self.hparams.dropout)])
+                if i == 1:
+                    layers.append(nn.Linear(in_dim, hidden_dim), activation, nn.Dropout(self.hparams.dropout))
+                else:
+                    layers.extend([nn.Linear(hidden_dim, hidden_dim), activation, nn.Dropout(self.hparams.dropout)])
             # final
             if n_layer == 1:
                 layers.append(nn.Linear(in_dim, out_dim))
